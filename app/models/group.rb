@@ -65,16 +65,11 @@ class Group < ActiveRecord::Base
     errors.add('attendance', :invalid) if attendance_required? && !attendance?
   end
 
+  blank_to_nil :address
+
   def attendance_required?
     group_times.any?
   end
-
-  include Concerns::Geocode
-  geocode_with :location_with_country
-
-  blank_to_nil :address
-
-  alias_attribute :pretty_address, :location
 
   before_create :set_share_token
 
@@ -100,12 +95,17 @@ class Group < ActiveRecord::Base
     membership_mode == 'parents_of' and parents_of
   end
 
-  def location_with_country
-    [location, Setting.get(:system, :default_country)].join(", ")
+  include Concerns::Geocode
+  geocode_with :location, :country
+
+  def country
+    Setting.get(:system, :default_country)
   end
 
+  alias_attribute :pretty_address, :location
+
   def mapable?
-    latitude.to_f != 0.0 and longitude.to_f != 0.0
+    latitude.to_f != 0.0 && longitude.to_f != 0.0
   end
 
   def get_options_for(person)
@@ -123,29 +123,31 @@ class Group < ActiveRecord::Base
 
   def update_memberships
     return if dont_update_memberships
-    if membership_mode == 'adults' and Person.undeleted.adults.count <= EVERYONE_LIMIT
+    if membership_mode == 'adults' && Person.undeleted.adults.count <= EVERYONE_LIMIT
       update_membership_associations(Person.undeleted.adults.to_a)
     elsif parents_of?
-      parents = Group.find(parents_of).people.map { |p| p.parents }.flatten.uniq
+      parents = Group.find(parents_of).people.map(&:parents).flatten.uniq
       update_membership_associations(parents)
     elsif linked?
-      q = []
-      p = []
-      link_code.downcase.split.each do |code|
-        q << "lower(classes) = ? or
-              lower(classes) like ? or lower(classes) like ? or lower(classes) like ? or
-              lower(classes) like ? or lower(classes) like ?"
-        p += [code,
-              "#{code},%", "%,#{code}", "%,#{code},%",
-              "#{code}[%", "%,#{code}[%"]
-      end
-      scope = Person.where(q.join(' or '), *p)
-      update_membership_associations(scope.to_a)
-    elsif Membership.column_names.include?('auto')
-      memberships.where(auto: true).each { |m| m.destroy }
+      update_linked_memberships
+    else
+      memberships.where(auto: true).destroy_all
     end
-    # have to expire the group fragments here since this is run in background nightly
-    ActionController::Base.cache_store.delete_matched(%r{groups/#{id}})
+  end
+
+  def update_linked_memberships
+    q = []
+    p = []
+    link_code.downcase.split.each do |code|
+      q << "lower(classes) = ? or
+            lower(classes) like ? or lower(classes) like ? or lower(classes) like ? or
+            lower(classes) like ? or lower(classes) like ?"
+      p += [code,
+            "#{code},%", "%,#{code}", "%,#{code},%",
+            "#{code}[%", "%,#{code}[%"]
+    end
+    scope = Person.where(q.join(' or '), *p)
+    update_membership_associations(scope.to_a)
   end
 
   def update_membership_associations(new_people)
@@ -201,14 +203,20 @@ class Group < ActiveRecord::Base
     address.present? ? (address + '@' + Site.current.email_host) : nil
   end
 
-  def get_people_attendance_records_for_date(date)
+  def get_people_attendance_records_for_date(date, order_by_last: false)
     records = {}
     people.each { |p| records[p.id] = [p, false] }
     date = Date.parse(date) if(date.is_a?(String))
     attendance_records_for_date(date).each do |record|
       records[record.person.id] = [record.person, record]
     end
-    records.values.sort_by { |r| [r[0].last_name, r[0].first_name] }
+    records.values.sort_by do |r|
+      if order_by_last
+        [r[0].last_name, r[0].first_name]
+      else
+        [r[0].first_name, r[0].last_name]
+      end
+    end
   end
 
   def attendance_records_for_date(date)

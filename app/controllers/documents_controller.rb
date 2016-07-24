@@ -13,6 +13,8 @@ class DocumentsController < ApplicationController
     @folders = @folders.open unless @show_restricted_folders
     @folders = @folders.active unless @show_hidden_folders
     @documents = (@parent_folder.try(:documents) || Document.top).order(:name)
+    cookies[:document_view] = params[:view] if params[:view].present?
+    @view = cookies[:document_view] || 'detail'
   end
 
   def show
@@ -31,19 +33,9 @@ class DocumentsController < ApplicationController
 
   def create
     if params[:folder]
-      @folder = DocumentFolder.new(folder_params)
-      if @folder.save
-        redirect_to documents_path(folder_id: @folder), notice: t('documents.create_folder.notice')
-      else
-        render action: 'new_folder'
-      end
+      create_folder
     else
-      @document = Document.new(document_params)
-      if @document.save
-        redirect_to document_path(@document), notice: t('documents.create.notice')
-      else
-        render action: 'new'
-      end
+      create_documents
     end
   end
 
@@ -67,7 +59,7 @@ class DocumentsController < ApplicationController
     else
       @document = Document.find(params[:id])
       if @document.update_attributes(document_params)
-        redirect_to documents_path(folder_id: @document.folder_id), notice: t('documents.update.notice')
+        redirect_to @document, notice: t('documents.update.notice')
       else
         render action: 'edit'
       end
@@ -99,6 +91,39 @@ class DocumentsController < ApplicationController
 
   private
 
+  def create_folder
+    @folder = DocumentFolder.new(folder_params)
+    if @folder.save
+      redirect_to documents_path(folder_id: @folder), notice: t('documents.create_folder.notice')
+    else
+      render action: 'new_folder'
+    end
+  end
+
+  def create_documents
+    @successes = []
+    @errors = []
+    params[:document][:file].each_with_index do |file, index|
+      @document = Document.new(
+        name: params[:document][:name][index],
+        description: params[:document][:description][index],
+        folder_id: params[:document][:folder_id],
+        file: file
+      )
+      if @document.save
+        @successes << @document.name
+      else
+        @errors << @document.name
+      end
+    end
+    if @errors.any?
+      flash[:error] = t('documents.create.failure', count: @errors.size, filenames: @errors.join(', '))
+    else
+      flash[:notice] = t('documents.create.notice', count: @successes.size)
+    end
+    redirect_to documents_path(folder_id: params[:document][:folder_id])
+  end
+
   def find_parent_folder
     return if params[:folder_id].blank?
     @parent_folder = DocumentFolder.find(params[:folder_id])
@@ -111,7 +136,14 @@ class DocumentsController < ApplicationController
   end
 
   def document_params
+    params[:document] = dearray_params(params[:document]) if params[:action] == 'update'
     params.require(:document).permit(:name, :description, :folder_id, :file)
+  end
+
+  def dearray_params(params)
+    params.transform_values do |value|
+      value.is_a?(Array) ? value.first : value
+    end
   end
 
   def feature_enabled?

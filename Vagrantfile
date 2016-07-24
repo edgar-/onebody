@@ -7,7 +7,7 @@ $ruby_version = File.read(File.expand_path("../.ruby-version", __FILE__)).strip
 
 $vhost = <<VHOST
 <VirtualHost *:80>
-  PassengerRuby /home/vagrant/.rvm/wrappers/ruby-2.1.5@onebody/ruby
+  PassengerRuby /home/vagrant/.rvm/wrappers/ruby-#{$ruby_version}@onebody/ruby
   DocumentRoot /vagrant/public
   RailsEnv development
   <Directory /vagrant/public>
@@ -26,7 +26,7 @@ set -ex
 apt-get update -qq
 debconf-set-selections <<< 'mysql-server mysql-server/root_password password vagrant'
 debconf-set-selections <<< 'mysql-server mysql-server/root_password_again password vagrant'
-apt-get install -q -y build-essential curl libcurl4-openssl-dev nodejs git mysql-server libmysqlclient-dev libaprutil1-dev libapr1-dev apache2 apache2-threaded-dev imagemagick
+apt-get install -q -y build-essential curl libcurl4-openssl-dev nodejs git mysql-server libmysqlclient-dev libgmp3-dev libaprutil1-dev libapr1-dev apache2 apache2-threaded-dev imagemagick
 
 # setup db
 mysql -u root -pvagrant -e "grant all on onebody_dev.*  to onebody@localhost identified by 'onebody';"
@@ -54,11 +54,11 @@ user=$(cat <<USER
 
   # setup config and migrate db
   if [[ ! -e config/secrets.yml ]]; then
-    secret=\\$(/home/vagrant/.rvm/gems/#{$ruby_version}@onebody/bin/rake -s secret)
+    secret=\\$(rake -s secret)
     sed -e"s/SOMETHING_RANDOM_HERE/\\$secret/g" config/secrets.yml.example > config/secrets.yml
   fi
-  \\$HOME/.rvm/gems/#{$ruby_version}@onebody/bin/rake db:create
-  \\$HOME/.rvm/gems/#{$ruby_version}@onebody/bin/rake db:migrate db:seed
+  \\rake db:create
+  \\rake db:migrate db:seed
 
   # install apache and passenger
   if [[ ! -e /etc/apache2/conf-available/passenger.conf ]]; then

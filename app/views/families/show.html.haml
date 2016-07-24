@@ -13,7 +13,7 @@
 
 .row
   .col-md-6
-    = avatar_tag @family, size: :large
+    = avatar_tag @family, size: :large, class: 'fit-width'
 
     %table.table
       - if @family.show_attribute_to?(:home_phone, @logged_in)
@@ -27,6 +27,8 @@
             = preserve_breaks @family.address
             %br
             == #{@family.city}, #{@family.state} #{@family.short_zip}
+            %br
+            = link_to t('.table.map'), "https://www.google.com/maps/place/#{@family.address.tr("\n","")} #{@family.city}, #{@family.state} #{@family.short_zip}/", :target => "_blank"
       - if anniversary = @family.anniversary_sharable_with(@logged_in)
         %tr
           %td= t('.table.anniversary')

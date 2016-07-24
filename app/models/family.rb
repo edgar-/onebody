@@ -6,7 +6,7 @@ class Family < ActiveRecord::Base
 
   MAX_TO_BATCH_AT_A_TIME = 50
 
-  has_many :people, -> { order(:position) }, dependent: :destroy
+  has_many :people, -> { order(:position) }, dependent: :destroy, inverse_of: :family
   has_many :updates, -> { order(:created_at) }
   accepts_nested_attributes_for :people
   belongs_to :site
@@ -17,7 +17,7 @@ class Family < ActiveRecord::Base
 
   scope :undeleted, -> { where(deleted: false) }
   scope :deleted, -> { where(deleted: true) }
-  scope :has_printable_people, -> { where('(select count(*) from people where family_id = families.id and visible_on_printed_directory = ?) > 0', true) }
+  scope :has_printable_people, -> { where('(select count(*) from people where family_id = families.id and status = ? and deleted = ?) > 0', Person.statuses[:active], false) }
   scope :by_barcode, -> b { where('barcode_id = ? or alternate_barcode_id = ?', b, b) }
 
   validates :name, presence: true
@@ -50,13 +50,13 @@ class Family < ActiveRecord::Base
   end
 
   def barcode_id=(b)
-    write_attribute(:barcode_id, b.present? ? b : nil)
-    write_attribute(:barcode_assigned_at, Time.now.utc)
+    write_attribute(:barcode_id, b.presence)
+    self.barcode_assigned_at = Time.now if barcode_id_changed?
   end
 
   def alternate_barcode_id=(b)
-    write_attribute(:alternate_barcode_id, b.present? ? b : nil)
-    write_attribute(:barcode_assigned_at, Time.now.utc)
+    write_attribute(:alternate_barcode_id, b.presence)
+    self.barcode_assigned_at = Time.now if barcode_id_changed?
   end
 
   def address
@@ -68,11 +68,7 @@ class Family < ActiveRecord::Base
   end
 
   include Concerns::Geocode
-  geocode_with :geocoding_address
-
-  def geocoding_address
-    [address, city, state, zip, country].map(&:presence).compact.join(', ')
-  end
+  geocode_with :address, :city, :state, :zip, :country
 
   # not HTML-escaped!
   def pretty_address
@@ -200,6 +196,17 @@ class Family < ActiveRecord::Base
       (first, second) = adults.take(2)
       if first.last_name == second.last_name
         key = 'families.name.same_last_name'
+      elsif Setting.get(:system, :language) == "cs"
+        key = 'families.name.different_last_names'
+        husband, wife = first, second
+        if first.gender == "Female"
+          husband, wife = second, first
+        end
+        # In Czech, wife's and family name are usualy extensions of husband's name
+        if wife.last_name[husband.last_name]
+          key = 'families.name.husband_last_name'
+          first, second = husband, wife
+        end
       else
         key = 'families.name.different_last_names'
       end
@@ -224,56 +231,6 @@ class Family < ActiveRecord::Base
     update_attribute(:deleted, true)
   end
 
-  # used to update a batch of records at one time, for UpdateAgent API
-  def self.update_batch(records, options={})
-    raise "Too many records to batch at once (#{records.length})" if records.length > MAX_TO_BATCH_AT_A_TIME
-    records.map do |record|
-      # find the family (by legacy_id, preferably)
-      family = where(legacy_id: record["legacy_id"]).first
-      if family.nil? and options['claim_families_by_barcode_if_no_legacy_id'] and record['barcode_id'].present?
-        # if no family was found by legacy id, let's try by barcode id
-        # but only if the matched family has no legacy id!
-        # (because two separate families could potentially have accidentally been assigned the same barcode)
-        if family = where(legacy_id: nil, barcode_id: record["barcode_id"]).first
-          # mark all people in this family as deleted, and we'll try to revive them on the Person#update_batch side
-          family.people.where(legacy_id: nil).update_all(deleted: true)
-        end
-      end
-      # last resort, create a new record
-      family ||= new
-      if options['delete_families_with_conflicting_barcodes_if_no_legacy_id'] and !family.new_record?
-        # closely related to the other option, but this one deletes conflicting families
-        # (only if they have no legacy id)
-        destroy_all ["legacy_id is null and barcode_id = ? and id != ?", record['barcode_id'], family.id]
-      end
-      record.each do |key, value|
-        value = nil if value == ''
-        # avoid overwriting a newer barcode
-        if key == 'barcode_id' and family[:barcode_id_changed]
-          if value == family.barcode_id # barcode now matches (presumably, the external db has been updated to match the OneBody db)
-            family[:barcode_id_changed] = false # clear the flag
-          else
-            next # don't overwrite the newer barcode with an older one
-          end
-        elsif %w(barcode_id_changed remote_hash).include?(key) # skip these
-          next
-        end
-        family.send("#{key}=", value) # be sure to call the actual method (don't use write_attribute)
-      end
-      family.dont_mark_barcode_id_changed = true # set flag to indicate we're the api
-      if family.save
-        s = {status: 'saved', legacy_id: family.legacy_id, id: family.id, name: family.name}
-        if family.barcode_id_changed? # barcode_id_changed flag still set
-          s[:status] = 'saved with error'
-          s[:error] = "Newer barcode not overwritten: #{family.barcode_id.inspect}"
-        end
-        s
-      else
-        {status: 'not saved', legacy_id: record['legacy_id'], id: family.id, name: family.name, error: family.errors.full_messages.join('; ')}
-      end
-    end
-  end
-
   # Go straight to the database to fetch family details for the Directory Map
   def self.mappable_details
     connection.select_all(
@@ -282,7 +239,10 @@ class Family < ActiveRecord::Base
       'left outer join people on people.family_id = families.id ' \
       "where people.visible = #{Family.connection.quoted_true} " \
       "and families.visible = #{Family.connection.quoted_true} " \
-      "and people.visible_to_everyone = #{Family.connection.quoted_true} " \
+      "and families.deleted = #{Family.connection.quoted_false} " \
+      "#{(Person.logged_in.admin?(:view_hidden_attributes)) ? "" :
+          "and people.share_address = #{Family.connection.quoted_true} "}" \
+      "and people.status = #{Person.statuses[:active]} " \
       "and families.site_id = #{Site.current.id} " \
       'and coalesce(families.latitude, 0.0) != 0.0 ' \
       'and coalesce(families.longitude, 0.0) != 0.0 ' \

@@ -1,5 +1,5 @@
 class ApplicationController < ActionController::Base
-  protect_from_forgery
+  protect_from_forgery with: :exception
   skip_before_action :verify_authenticity_token, if: -> { logged_in_from_api_key? }
 
   # these are prepended so they happen before verify_authenticity_token
@@ -92,7 +92,7 @@ class ApplicationController < ActionController::Base
         redirect_to new_session_path
         return false
       end
-      unless person.can_sign_in?
+      unless person.able_to_sign_in?
         session[:logged_in_id] = nil
         redirect_to page_for_public_path('system/bad_status')
         return false
@@ -130,7 +130,7 @@ class ApplicationController < ActionController::Base
   end
 
   def check_full_access
-    if @logged_in and !@logged_in.full_access?
+    if @logged_in && @logged_in.pending?
       unless LIMITED_ACCESS_AVAILABLE_ACTIONS.include?("#{params[:controller]}/#{params[:action]}") or \
              LIMITED_ACCESS_AVAILABLE_ACTIONS.include?("#{params[:controller]}/*")
         render text: t('people.limited_access_denied'), layout: true, status: 401
@@ -177,7 +177,7 @@ class ApplicationController < ActionController::Base
   end
 
   def add_errors_to_flash(record)
-    flash[:warning] = record.errors.full_messages.join('; ')
+    flash[:warning] = record.errors.values.join('; ')
   end
 
   def only_admins

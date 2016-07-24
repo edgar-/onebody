@@ -220,7 +220,7 @@ class Notifier < ActionMailer::Base
           I18n.t('notifier.rejection.invalid.subject', subject: email.subject),
           I18n.t('notifier.rejection.invalid.body',
                  subject: email.subject,
-                 errors: message.errors.full_messages.join("\n"),
+                 errors: message.errors.values.join("\n"),
                  support: Setting.get(:contact, :tech_support_contact))
         ).deliver_now
         sent_to_count += 1
@@ -310,6 +310,7 @@ class Notifier < ActionMailer::Base
     to_addresses = Array(email.cc) + Array(email.to)
     site = nil
     to_addresses.each do |address|
+      next if address.nil?
       site = Site.where(host: address.downcase.split('@').last).first ||
              Site.where(email_host: address.downcase.split('@').last).first
       return site if site

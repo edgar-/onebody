@@ -32,6 +32,7 @@ en:
       new_count:
         one: "1 new"
         other: "%{count} new"
+    imports: "Imports"
     messages: "Messages"
     news: "News"
     notes: "Notes"
@@ -43,10 +44,10 @@ en:
       email: "Email"
       password: "Password"
       privacy: "Privacy"
+      family: "Family"
       relationships: "Relationships"
       show: "View Profile"
     report: "Reporting"
-    syncs: "Syncs"
     verses: "Verses"
     tasks: "Tasks"
     tasks_sub:

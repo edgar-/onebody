@@ -11,7 +11,6 @@ class Person < ActiveRecord::Base
   include Concerns::Person::Import
   include Concerns::Person::Export
   include Concerns::Person::PdfGen
-  include Concerns::Person::Batch
   include Concerns::Person::TwitterUsername
   include Concerns::Person::Streamable
   include Concerns::Person::EmailChanged
@@ -42,7 +41,7 @@ class Person < ActiveRecord::Base
   has_many :prayer_requests, -> { order(created_at: :desc) }
   has_many :attendance_records
   has_many :generated_files
-  has_many :tasks
+  has_many :tasks, ->(my) { where('tasks.group_scope is true or tasks.person_id = ? ', my.id) }, through: :groups
   belongs_to :site
   belongs_to :last_seen_stream_item, class_name: 'StreamItem'
   belongs_to :last_seen_group, class_name: 'Group'
@@ -52,17 +51,17 @@ class Person < ActiveRecord::Base
   MINIMAL_ATTRIBUTES = %w(
     id first_name last_name suffix child gender birthday gender deleted
     photo_file_name photo_content_type photo_fingerprint photo_updated_at
-  )
+  ).freeze
 
   scope :undeleted,              -> { where(deleted: false) }
   scope :deleted,                -> { where(deleted: true) }
   scope :adults,                 -> { where(child: false) }
   scope :adults_or_have_consent, -> { where("child = ? or coalesce(parental_consent, '') != ''", false) }
   scope :children,               -> { where(child: true) }
-  scope :can_sign_in,            -> { undeleted.where(can_sign_in: true) }
+  scope :can_sign_in,            -> { undeleted.where(status: Person.statuses.values_at(:pending, :active)) }
   scope :administrators,         -> { undeleted.where('admin_id is not null') }
   scope :minimal,                -> { select(MINIMAL_ATTRIBUTES.map { |a| "people.#{a}" }.join(',')) }
-  scope :with_birthday_month,    -> m { where('birthday is not null and extract(month from birthday) = ?', m) }
+  scope :with_birthday_month,    -> (m) { where('birthday is not null and extract(month from birthday) = ?', m) }
 
   has_attached_file :photo, PAPERCLIP_PHOTO_OPTIONS
 
@@ -80,7 +79,7 @@ class Person < ActiveRecord::Base
   validates :alternate_email,
             uniqueness: { scope: [:site_id, :deleted] },
             allow_nil: true,
-            unless: -> p { p.deleted? }
+            unless: -> (p) { p.deleted? }
   validates :feed_code,
             uniqueness: { scope: :site_id },
             allow_nil: true
@@ -104,6 +103,7 @@ class Person < ActiveRecord::Base
   validates_date_of :birthday, :anniversary, allow_nil: true
   validates_attachment_size :photo, less_than: PAPERCLIP_PHOTO_MAX_SIZE
   validates_attachment_content_type :photo, content_type: PAPERCLIP_PHOTO_CONTENT_TYPES
+  validates_associated :family
   validate :validate_email_unique
 
   def validate_email_unique
@@ -114,6 +114,12 @@ class Person < ActiveRecord::Base
                         .any?
     errors.add :email, :taken
   end
+
+  enum status: {
+    inactive: 0,
+    pending:  1,
+    active:   2
+  }
 
   lowercase_attribute :email, :alternate_email
 
@@ -126,11 +132,11 @@ class Person < ActiveRecord::Base
   self.skip_time_zone_conversion_for_attributes = [:birthday, :anniversary]
   self.digits_only_for_attributes = [:mobile_phone, :work_phone, :fax, :business_phone]
 
-  blank_to_nil :suffix
+  blank_to_nil :suffix, :can_pick_up, :cannot_pick_up, :classes, :medical_notes
 
   date_writer :birthday, :anniversary
 
-  after_initialize :guess_last_name, if: -> p { p.last_name.nil? }
+  after_initialize :guess_last_name, if: -> (p) { p.last_name.nil? }
 
   def guess_last_name
     return unless family
@@ -139,6 +145,7 @@ class Person < ActiveRecord::Base
 
   def others_with_same_email
     return [] unless family
+    return [] unless email.present?
     family.people.undeleted.where(email: email).where.not(id: id)
   end
 
@@ -161,6 +168,11 @@ class Person < ActiveRecord::Base
     end
   end
 
+  def name_and_nick
+    return name unless self.alias
+    "#{name} [#{self.alias}]"
+  end
+
   def formatted_email
     return unless email.present?
     Mail::Address.new(email).tap do |address|
@@ -172,8 +184,8 @@ class Person < ActiveRecord::Base
     "<#{id}:#{name}>"
   end
 
-  def can_sign_in?
-    read_attribute(:can_sign_in) && adult_or_consent?
+  def able_to_sign_in?
+    (active? || pending?) && adult_or_consent? && email.present?
   end
 
   def messages_enabled?
@@ -190,7 +202,7 @@ class Person < ActiveRecord::Base
 
   def visible?(fam = nil)
     fam ||= family
-    fam && fam.visible? && read_attribute(:visible) && adult_or_consent? && visible_to_everyone?
+    fam && fam.visible? && read_attribute(:visible) && adult_or_consent? && (active? || pending?)
   end
 
   def gender=(g)
@@ -230,13 +242,6 @@ class Person < ActiveRecord::Base
       update_attribute(:deleted, true)
       updates.destroy_all
     end
-  end
-
-  def set_default_visibility
-    self.can_sign_in = true
-    self.visible_to_everyone = true
-    self.visible_on_printed_directory = true
-    self.full_access = true
   end
 
   def record_last_seen_stream_item(stream_item)

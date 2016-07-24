@@ -3,20 +3,18 @@ ENV["RAILS_ENV"] ||= 'test'
 require File.expand_path("../../config/environment", __FILE__)
 require 'rspec/rails'
 require 'shoulda/matchers'
+require 'sucker_punch/testing/inline'
 
-Dir[Rails.root.join("spec/support/**/*.rb")].each { |f| require f }
+Dir[Rails.root.join("spec/support/*.rb")].each { |f| require f }
 
 RSpec.configure do |config|
   config.include SessionHelper
   config.include MailHelper
 
-  config.order = 'random'
   config.use_transactional_fixtures = true
   config.fixture_path = Rails.root.join('spec/fixtures')
-  ActiveRecord::Migration.maintain_test_schema!
 
-  config.filter_run_including focus: true
-  config.run_all_when_everything_filtered = true
+  ActiveRecord::Migration.maintain_test_schema!
 
   config.before(:all) do
     begin
@@ -29,6 +27,7 @@ RSpec.configure do |config|
       else
         Site.connection.execute('ALTER TABLE sites AUTO_INCREMENT = 1;')
       end
+      Setting.update_all
       Site.current = Site.create!(name: 'Default', host: 'example.com')
     end
     Setting.update_all
@@ -37,6 +36,17 @@ RSpec.configure do |config|
   config.before(:each) do
     ActionMailer::Base.deliveries.clear
     allow(StreamItemGroupJob).to receive(:perform_later)
+    Geocoder.configure(lookup: :test)
+    Geocoder::Lookup::Test.set_default_stub([{
+      'latitude'     => 40.7143528,
+      'longitude'    => -74.0059731,
+      'address'      => 'New York, NY, USA',
+      'state'        => 'New York',
+      'state_code'   => 'NY',
+      'country'      => 'United States',
+      'country_code' => 'US',
+      'precision' => 'RANGE_INTERPOLATED'
+    }])
   end
 
   config.after(:each) do

@@ -25,10 +25,6 @@ Contact:
   Send Updates To:
     format: string
     value: admin@example.com
-Email:
-  MailgunApiKey:
-    format: string
-    value:
 Name:
   Community:
     format: string
@@ -134,6 +130,11 @@ Pusher:
   WSS Port:
     format: string
     value: 443
+Facebook:
+  App ID:
+    format: string
+  App Secret:
+    format: string
 URL:
   Visitor:
     format: string
@@ -204,6 +205,9 @@ Appearance:
   Theme Nav Color:
     format: string
     value: E4E4E4
+  Theme:
+    format: string
+    value: skin-blue-light
 Privacy:
   Allow Unencrypted Logins:
     format: boolean

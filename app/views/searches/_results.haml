@@ -14,7 +14,7 @@
 
 - if @people and @people.any?
 
-  - if @logged_in.full_access?
+  - if @logged_in.active?
     %table.table.search-results
       %tr
         %th
@@ -43,7 +43,7 @@
                 = link_to person.business_category, search_path(business: true, category: person.business_category)
           - else
             %td
-              = link_to person.name, person
+              = link_to person.name_and_nick, person
               - unless person.visible?
                 %i.fa.fa-lock
             %td

@@ -4,20 +4,44 @@ module Concerns
   module Geocode
     extend ActiveSupport::Concern
 
-    module ClassMethods
-      def geocode_with(location)
-        proc = method(:process_geocode_result).to_proc
-        geocoded_by location, &proc
-        after_validation :geocode
-      end
+    included do
+      attr_accessor :dont_geocode
+      after_save :geocode_later, if: :should_geocode?
+    end
 
-      def process_geocode_result(model, results=nil)
-        if (geocoding_data = results.first) && geocoding_data.try(:precision) != 'APPROXIMATE'
-          model.longitude = geocoding_data.longitude
-          model.latitude = geocoding_data.latitude
+    def geocode_later
+      GeocoderJob.perform_later(site, self.class.name, id)
+    end
+
+    def geocode
+      if blank_address?
+        self.latitude = nil
+        self.longitude = nil
+      else
+        results = Geocoder.search(geocoding_address)
+        if (result = results.first)
+          self.latitude = result.latitude
+          self.longitude = result.longitude
         else
-          model.longitude = nil
-          model.latitude = nil
+          self.latitude = nil
+          self.longitude = nil
+        end
+      end
+    end
+
+    class_methods do
+      def geocode_with(*attrs)
+        define_method :geocoding_address do
+          attrs.map { |attr| send(attr) }.reject(&:blank?).join(', ')
+        end
+
+        define_method :blank_address? do
+          attrs.any? { |attr| send(attr).blank? }
+        end
+
+        define_method :should_geocode? do
+          return false if dont_geocode
+          attrs.any? { |attr| changed.include?(attr.to_s) }
         end
       end
     end
